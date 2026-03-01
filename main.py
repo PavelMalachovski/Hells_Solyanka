@@ -29,6 +29,7 @@ from database import (
     PAGE_SIZE,
     clear_questions,
     count_questions,
+    get_adjacent_question_ids,
     get_question_by_id,
     get_questions_paged,
     init_db,
@@ -116,9 +117,31 @@ def _questions_kb(
     return builder.as_markup()
 
 
-def _question_detail_kb(q_id: int, page: int, filter_flag: str) -> InlineKeyboardMarkup:
-    """Keyboard for a single question: send to group + back."""
+def _question_detail_kb(
+    q_id: int,
+    page: int,
+    filter_flag: str,
+    prev_id: int | None = None,
+    next_id: int | None = None,
+) -> InlineKeyboardMarkup:
+    """Keyboard for a single question: prev/next, send to group, back to list."""
     builder = InlineKeyboardBuilder()
+
+    # Prev / Next navigation row
+    nav: list[InlineKeyboardButton] = []
+    if prev_id is not None:
+        nav.append(InlineKeyboardButton(
+            text="◀️ Пред.",
+            callback_data=f"q_view:{prev_id}:{page}:{filter_flag}",
+        ))
+    if next_id is not None:
+        nav.append(InlineKeyboardButton(
+            text="След. ▶️",
+            callback_data=f"q_view:{next_id}:{page}:{filter_flag}",
+        ))
+    if nav:
+        builder.row(*nav)
+
     builder.row(
         InlineKeyboardButton(
             text="📤 Отправить в группу",
@@ -230,10 +253,13 @@ async def cb_question_view(callback: CallbackQuery) -> None:
     _, q_id_str, page_str, filter_flag = callback.data.split(":")
     q = await get_question_by_id(int(q_id_str))
     page = int(page_str)
+    unsent_only = filter_flag == "1"
 
     if q is None:
         await callback.answer("Вопрос не найден.", show_alert=True)
         return
+
+    prev_id, next_id = await get_adjacent_question_ids(q.id, unsent_only=unsent_only)
 
     import html as _html
     sent_status = "✅ уже отправлен" if q.is_sent else "🔲 не отправлен"
@@ -246,7 +272,7 @@ async def cb_question_view(callback: CallbackQuery) -> None:
         text += f"\n\n<tg-spoiler>💡 <b>Ответ:</b> {_html.escape(q.answer)}</tg-spoiler>"
     text += f"\n\n<i>Статус: {sent_status}</i>"
 
-    kb = _question_detail_kb(q.id, page, filter_flag)
+    kb = _question_detail_kb(q.id, page, filter_flag, prev_id=prev_id, next_id=next_id)
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 

@@ -240,6 +240,19 @@ def _clean_text(text: str) -> str:
         # Skip pack-header lines like "Балканфест — 2025 · ноябрь 2025"
         if re.search(r'·\s+\w+\s+\d{4}', line):
             continue
+        # Skip author lines: "Автор: Имя Фамилия"
+        if re.match(r'Авто?р\s*:', line, re.IGNORECASE):
+            continue
+        # Skip source/citation lines: "Источники:", "1. ...", "2. https://..."
+        if re.match(r'Источники\s*:', line, re.IGNORECASE):
+            continue
+        if re.match(r'\d+\.\s+https?://', line):
+            continue
+        # Skip bare vote/difficulty stats: "98", "/ 154 · 63.64%"
+        if re.fullmatch(r'\d+', line):
+            continue
+        if re.match(r'/\s*\d+\s*[·•]', line):
+            continue
         cleaned.append(line)
 
     result = "\n".join(cleaned)

@@ -142,6 +142,27 @@ async def get_question_by_id(question_id: int) -> Question | None:
         return await session.get(Question, question_id)
 
 
+async def get_adjacent_question_ids(
+    question_id: int,
+    unsent_only: bool = True,
+) -> tuple[int | None, int | None]:
+    """Return (prev_id, next_id) for a question, ordered by id."""
+    async with async_session_factory() as session:
+        def _base():
+            q = select(Question.id).order_by(Question.id)
+            if unsent_only:
+                q = q.where(Question.is_sent == False)  # noqa: E712
+            return q
+
+        prev_result = await session.execute(
+            _base().where(Question.id < question_id).order_by(Question.id.desc()).limit(1)
+        )
+        next_result = await session.execute(
+            _base().where(Question.id > question_id).limit(1)
+        )
+        return prev_result.scalar_one_or_none(), next_result.scalar_one_or_none()
+
+
 async def clear_questions() -> int:
     """Delete all questions. Returns the number of rows deleted."""
     from sqlalchemy import delete
