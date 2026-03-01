@@ -140,3 +140,12 @@ async def get_questions_paged(
 async def get_question_by_id(question_id: int) -> Question | None:
     async with async_session_factory() as session:
         return await session.get(Question, question_id)
+
+
+async def clear_questions() -> int:
+    """Delete all questions. Returns the number of rows deleted."""
+    from sqlalchemy import delete
+    async with async_session_factory() as session:
+        result = await session.execute(delete(Question))
+        await session.commit()
+        return result.rowcount

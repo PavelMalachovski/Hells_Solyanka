@@ -150,6 +150,23 @@ async def _fetch_single_question(
                 # Answer reveal may have worked anyway; proceed
                 await q_page.wait_for_timeout(800)
 
+        # Remove nav / header / footer DOM elements so their icon-name text
+        # ("search", "quiz", "casino" …) doesn't pollute extracted content.
+        await q_page.evaluate("""
+            () => {
+                const remove = [
+                    'nav', 'header', 'footer',
+                    '[class*="app-bar"]', '[class*="toolbar"]',
+                    '[class*="navbar"]', '[class*="nav-"]',
+                    '[class*="cookie"]', '[class*="consent"]',
+                    '[class*="banner"]',
+                ];
+                remove.forEach(sel =>
+                    document.querySelectorAll(sel).forEach(el => el.remove())
+                );
+            }
+        """)
+
         # Get page text — try scoped content area first, fallback to body
         content_sel = q_page.locator("main, article, [class*='content'], [class*='question']").first
         if await content_sel.count():
@@ -179,24 +196,55 @@ async def _fetch_single_question(
         await q_page.close()
 
 
+# Material icon ligature names rendered as text by the website's nav
+_NAV_ICON_WORDS: frozenset[str] = frozenset({
+    "search", "quiz", "casino", "group", "timer", "help_center",
+    "dark_mode", "bug_report", "login", "logout", "content_copy",
+    "thumb_up", "thumb_down", "bookmark_border", "bookmark", "share",
+    "expand_more", "expand_less", "visibility_off", "visibility",
+    "more_vert", "more_horiz", "menu", "close", "arrow_back",
+    "arrow_forward", "home", "person", "settings", "info",
+})
+
+_NOISE_PHRASES: list[str] = [
+    "Показать ответ", "Скрыть ответ",
+    "Поиск", "Пакеты", "Случайный пакет", "Люди", "Таймер", "О сайте",
+    "Есть вопросы? у нас есть",
+    "Обратная связь", "Политика конфиденциальности", "Лицензирование",
+    "Хотите печенья?", "ОтклонитьПринять", "Отклонить", "Принять",
+]
+
+
 def _clean_text(text: str) -> str:
-    """Remove UI noise (icon names, buttons, footer) from extracted text."""
-    noise = [
-        "Поиск", "Пакеты", "Случайный пакет", "Люди", "Таймер", "О сайте",
-        "thumb_up", "thumb_down", "bookmark_border", "bookmark", "share",
-        "Показать ответ", "Скрыть ответ", "expand_more", "expand_less",
-        "visibility_off", "visibility",
-        "Есть вопросы? у нас есть",
-        "О сайте", "Обратная связь", "Политика конфиденциальности", "Лицензирование",
-        "Хотите печенья?", "ОтклонитьПринять",
-    ]
-    for n in noise:
-        text = text.replace(n, " ")
-    # Collapse multiple whitespace/newlines
-    text = re.sub(r"\s{3,}", "\n\n", text).strip()
-    # Trim lines
-    lines = [l.strip() for l in text.splitlines()]
-    return "\n".join(l for l in lines if l)[:3000]  # hard cap
+    """Remove UI noise (icon names, nav items, author lines) from extracted text."""
+    for phrase in _NOISE_PHRASES:
+        text = text.replace(phrase, " ")
+
+    cleaned: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Skip bare Material Icon names
+        if line.lower() in _NAV_ICON_WORDS:
+            continue
+        # Skip "Вопрос N" header (already stored as question_number)
+        if re.fullmatch(r'Вопрос\s+\d+', line):
+            continue
+        # Skip "Тур N" lines
+        if re.fullmatch(r'Тур\s+\d+', line, re.IGNORECASE):
+            continue
+        # Skip author attribution lines starting with «·»
+        if line.startswith("·"):
+            continue
+        # Skip pack-header lines like "Балканфест — 2025 · ноябрь 2025"
+        if re.search(r'·\s+\w+\s+\d{4}', line):
+            continue
+        cleaned.append(line)
+
+    result = "\n".join(cleaned)
+    result = re.sub(r'\n{3,}', '\n\n', result).strip()
+    return result[:3000]
 
 
 def _split_question_answer(block: str, link_text: str) -> tuple[str, str]:

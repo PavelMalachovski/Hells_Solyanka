@@ -27,6 +27,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from database import (
     PAGE_SIZE,
+    clear_questions,
     count_questions,
     get_question_by_id,
     get_questions_paged,
@@ -74,13 +75,15 @@ def _questions_kb(
     filter_flag = "1" if unsent_only else "0"
 
     for q in questions:
-        short = q.text[:55].replace("\n", " ")
-        if len(q.text) > 55:
+        # Use first non-empty line as preview (clean after scraper fix)
+        first_line = next((l.strip() for l in q.text.splitlines() if l.strip()), q.text)
+        short = first_line[:52]
+        if len(first_line) > 52:
             short += "…"
         sent_mark = "✅ " if q.is_sent else ""
         builder.row(
             InlineKeyboardButton(
-                text=f"{sent_mark}#{q.id} В{q.question_number} {short}",
+                text=f"{sent_mark}В{q.question_number}: {short}",
                 callback_data=f"q_view:{q.id}:{page}:{filter_flag}",
             )
         )
@@ -147,6 +150,7 @@ async def cmd_start(message: Message) -> None:
         "/status — статистика базы\n"
         "/questions — просмотр вопросов и отправка в группу\n"
         "/parse — запарсить Балканфест-2025 (только для админа)\n"
+        "/reparse — очистить базу и запарсить заново (только для админа)\n"
         "/parse_all — запарсить ВСЕ 6 550 пакетов (только для админа)\n"
         "/send_now — отправить случайный вопрос прямо сейчас (только для админа)",
         parse_mode="HTML",
@@ -181,16 +185,15 @@ async def cmd_questions(message: Message) -> None:
         )
         return
 
+    pack_name = questions[0].pack_name if questions else ""
     kb = _questions_kb(questions, page, total, unsent_only)
     await message.answer(
-        f"📋 <b>Вопросы</b> (неотправленных: <b>{total}</b>)\n"
+        f"📚 <b>{pack_name}</b>\n"
+        f"Вопросов (неотправленных: <b>{total}</b>)\n"
         "Нажми на вопрос чтобы посмотреть и отправить в группу.",
         parse_mode="HTML",
         reply_markup=kb,
-    )
-
-
-# ── callback: pagination ──────────────────────────────────────────────────────
+    ) ──────────────────────────────────────────────────────
 @router.callback_query(lambda c: c.data and c.data.startswith("q_page:"))
 async def cb_questions_page(callback: CallbackQuery) -> None:
     _, page_str, filter_flag = callback.data.split(":")
@@ -205,10 +208,12 @@ async def cb_questions_page(callback: CallbackQuery) -> None:
         page = max(0, page - 1)
         questions = await get_questions_paged(page=page, unsent_only=unsent_only)
 
+    pack_name = questions[0].pack_name if questions else ""
     kb = _questions_kb(questions, page, total, unsent_only)
     label = "неотправленных" if unsent_only else "всего"
     await callback.message.edit_text(
-        f"📋 <b>Вопросы</b> ({label}: <b>{total}</b>)\n"
+        f"📚 <b>{pack_name}</b>\n"
+        f"Вопросов ({label}: <b>{total}</b>)\n"
         "Нажми на вопрос чтобы посмотреть и отправить в группу.",
         parse_mode="HTML",
         reply_markup=kb,
@@ -276,10 +281,12 @@ async def cb_send_to_group(callback: CallbackQuery, bot: Bot) -> None:
     if not questions and page > 0:
         page -= 1
         questions = await get_questions_paged(page=page, unsent_only=unsent_only)
+    pack_name = questions[0].pack_name if questions else ""
     kb = _questions_kb(questions, page, total, unsent_only)
     label = "неотправленных" if unsent_only else "всего"
     await callback.message.edit_text(
-        f"📋 <b>Вопросы</b> ({label}: <b>{total}</b>)\n"
+        f"📚 <b>{pack_name}</b>\n"
+        f"Вопросов ({label}: <b>{total}</b>)\n"
         "Нажми на вопрос чтобы посмотреть и отправить в группу.",
         parse_mode="HTML",
         reply_markup=kb,
@@ -341,6 +348,30 @@ async def cmd_send_now(message: Message, bot: Bot) -> None:
         return
     await send_question(bot)
     await message.answer("✅ Вопрос отправлен в группу.")
+
+
+@router.message(Command("reparse"))
+async def cmd_reparse(message: Message) -> None:
+    """Clear all questions and re-scrape the current pack from scratch."""
+    if not _is_admin(message.from_user.id):
+        await message.answer("⛔ Только для администратора.")
+        return
+
+    deleted = await clear_questions()
+    await message.answer(
+        f"🗑 Удалено вопросов из базы: <b>{deleted}</b>\n"
+        f"🔄 Запускаю парсинг пакета {FIRST_PACK_ID} заново…",
+        parse_mode="HTML",
+    )
+    try:
+        inserted = await scrape_first_pack()
+        await message.answer(
+            f"✅ Готово! Добавлено вопросов: <b>{inserted}</b>",
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.exception("Reparse failed")
+        await message.answer(f"❌ Ошибка парсинга:\n<code>{exc}</code>", parse_mode="HTML")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
