@@ -188,6 +188,7 @@ async def _send_with_image(bot: Bot, chat_id: str | int, msg: str, image_url: st
     await bot.send_message(chat_id, msg, parse_mode="HTML")
 
 
+@router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
     total = await count_questions()
     unsent = await count_questions(unsent_only=True)
@@ -204,6 +205,19 @@ async def cmd_start(message: Message) -> None:
         "/parse_all — запарсить ВСЕ 6 550 пакетов (админ)\n"
         "/send_now — отправить случайный вопрос сейчас (админ)",
         parse_mode="HTML",
+    )
+
+
+@router.message(Command("questions"))
+async def cmd_questions(message: Message) -> None:
+    unsent_only = True
+    packs = await get_packs(unsent_only=unsent_only)
+    kb = _packs_kb(packs, unsent_only=unsent_only)
+    total_unsent = sum(p["unsent"] for p in packs)
+    await message.answer(
+        f"📖 <b>Пакеты</b> (неотправленных всего: <b>{total_unsent}</b>)\n"
+        "Нажми на пакет чтобы выбрать вопрос.",
+        parse_mode="HTML", reply_markup=kb,
     )
 
 
@@ -297,6 +311,50 @@ async def cb_send_to_group(callback: CallbackQuery, bot: Bot) -> None:
         "Нажми на вопрос чтобы посмотреть и отправить.",
         parse_mode="HTML", reply_markup=kb,
     )
+
+
+# ── callback: pack list (with filter toggle or back from pack questions) ─────
+@router.callback_query(lambda c: c.data and c.data.startswith("pk_list:"))
+async def cb_pack_list(callback: CallbackQuery) -> None:
+    # pk_list:{filter_flag}
+    filter_flag = callback.data.split(":")[1]
+    unsent_only = filter_flag == "1"
+    packs = await get_packs(unsent_only=unsent_only)
+    kb = _packs_kb(packs, unsent_only=unsent_only)
+    total_unsent = sum(p["unsent"] for p in packs)
+    await callback.message.edit_text(
+        f"📖 <b>Пакеты</b> (неотправленных всего: <b>{total_unsent}</b>)\n"
+        "Нажми на пакет чтобы выбрать вопрос.",
+        parse_mode="HTML", reply_markup=kb,
+    )
+    await callback.answer()
+
+
+# ── callback: questions list inside a pack ────────────────────────────────────
+@router.callback_query(lambda c: c.data and c.data.startswith("pq_page:"))
+async def cb_pack_questions(callback: CallbackQuery) -> None:
+    # pq_page:{pack_id}:{page}:{filter_flag}
+    parts = callback.data.split(":")
+    pack_id, page_str, filter_flag = parts[1], parts[2], parts[3]
+    page = int(page_str)
+    unsent_only = filter_flag == "1"
+    pack_link = f"{BASE_URL}/pack/{pack_id}"
+    questions = await get_questions_by_pack(pack_link, page=page, unsent_only=unsent_only)
+    total = await count_questions_by_pack(pack_link, unsent_only=unsent_only)
+    if not questions and page > 0:
+        page -= 1
+        questions = await get_questions_by_pack(pack_link, page=page, unsent_only=unsent_only)
+        total = await count_questions_by_pack(pack_link, unsent_only=unsent_only)
+    pack_name = questions[0].pack_name if questions else f"Пакет {pack_id}"
+    label = "неотправленных" if unsent_only else "всего"
+    kb = _pack_questions_kb(questions, pack_id, page, total, unsent_only)
+    await callback.message.edit_text(
+        f"📚 <b>{pack_name}</b>\n"
+        f"Вопросов ({label}): <b>{total}</b>\n"
+        "Нажми на вопрос чтобы посмотреть и отправить.",
+        parse_mode="HTML", reply_markup=kb,
+    )
+    await callback.answer()
 
 
 # ── fallback: old-style q_page callbacks (stale buttons from previous version)
