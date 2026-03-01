@@ -371,7 +371,10 @@ async def main() -> None:
     logger.info("Scheduler started. Will send questions 09–20 (Europe/Prague).")
 
     try:
-        await dp.start_polling(bot, allowed_updates=["message"])
+        await dp.start_polling(
+            bot,
+            allowed_updates=["message", "callback_query"],
+        )
     finally:
         scheduler.shutdown()
         await bot.session.close()

@@ -30,28 +30,39 @@ FIRST_PACK_ID: int = int(os.getenv("PACK_ID", "6705"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+async def _dismiss_cookie_banner(page: Page) -> None:
+    """Close the cookie consent banner so it doesn't block clicks."""
+    for label in ("Отклонить", "Принять"):
+        try:
+            btn = page.locator(f"text={label}").first
+            if await btn.count() > 0:
+                await btn.click(timeout=3000)
+                await page.wait_for_timeout(400)
+                logger.debug("Dismissed cookie banner ('%s').", label)
+                return
+        except Exception:
+            pass
+
+
+async def _js_click(page: Page, locator) -> None:
+    """Click via JavaScript to bypass any overlaying elements."""
+    el = await locator.element_handle(timeout=5000)
+    if el:
+        await page.evaluate("el => el.click()", el)
+
+
 async def _reveal_answers(page: Page) -> None:
     """Click the global eye-toggle (visibility_off) to reveal all answers."""
+    await _dismiss_cookie_banner(page)
     try:
-        # The icon is a Material-Icons <span> or <button> at the top of the pack
         toggle = page.locator("text=visibility_off").first
         if await toggle.count() > 0:
-            await toggle.click()
+            await _js_click(page, toggle)
             await page.wait_for_timeout(800)
             logger.debug("Clicked visibility_off toggle (show all answers).")
             return
     except Exception:
         pass
-
-    # Fallback: click every single "Показать ответ" button
-    buttons = await page.locator("text=Показать ответ").all()
-    logger.debug("Clicking %d individual 'Показать ответ' buttons…", len(buttons))
-    for btn in buttons:
-        try:
-            await btn.click()
-            await page.wait_for_timeout(100)
-        except Exception:
-            pass
 
 
 async def _parse_pack_page(page: Page, pack_url: str) -> list[dict]:
@@ -125,10 +136,11 @@ async def _fetch_single_question(
             if m:
                 doc_q_number = int(m.group())
 
-        # Click "Показать ответ" to reveal the answer
+        # Dismiss cookie banner first, then reveal answer via JS click
+        await _dismiss_cookie_banner(q_page)
         show_btn = q_page.locator("text=Показать ответ").first
         if await show_btn.count():
-            await show_btn.click()
+            await _js_click(q_page, show_btn)
             await q_page.wait_for_timeout(600)
 
         # Get the full page text and parse
