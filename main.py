@@ -262,15 +262,15 @@ async def cb_question_view(callback: CallbackQuery) -> None:
     prev_id, next_id = await get_adjacent_question_ids(q.id, unsent_only=unsent_only)
 
     import html as _html
-    sent_status = "✅ уже отправлен" if q.is_sent else "🔲 не отправлен"
     text = (
         f"📚 <b>{_html.escape(q.pack_name)}</b>  |  Вопрос {q.question_number}\n"
         f"{'─' * 30}\n\n"
         f"{_html.escape(q.text)}"
     )
+    if q.image_url:
+        text += f'\n\n🖼 <a href="{q.image_url}">Раздаточный материал</a>'
     if q.answer:
         text += f"\n\n<tg-spoiler>💡 <b>Ответ:</b> {_html.escape(q.answer)}</tg-spoiler>"
-    text += f"\n\n<i>Статус: {sent_status}</i>"
 
     kb = _question_detail_kb(q.id, page, filter_flag, prev_id=prev_id, next_id=next_id)
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
@@ -296,9 +296,14 @@ async def cb_send_to_group(callback: CallbackQuery, bot: Bot) -> None:
         return
 
     msg = _format_message(q)
-    await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
+    if q.image_url:
+        try:
+            await bot.send_photo(GROUP_ID, photo=q.image_url, caption=msg, parse_mode="HTML")
+        except Exception:
+            await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
+    else:
+        await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
     await mark_as_sent(q.id)
-    logger.info("Manually sent question id=%d to group %s.", q.id, GROUP_ID)
 
     await callback.answer("✅ Отправлено в группу!", show_alert=False)
 

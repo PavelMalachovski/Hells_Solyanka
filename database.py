@@ -51,6 +51,7 @@ class Question(Base):
     question_number: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     link: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -67,9 +68,14 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Create tables if they don't exist yet."""
+    """Create tables if they don't exist yet, and apply lightweight migrations."""
+    from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Idempotent migration: add image_url if upgrading from older schema
+        await conn.execute(text(
+            "ALTER TABLE questions ADD COLUMN IF NOT EXISTS image_url VARCHAR(1024)"
+        ))
 
 
 async def upsert_questions(questions: list[dict]) -> int:

@@ -66,7 +66,19 @@ async def send_question(bot: Bot) -> None:
         return
 
     msg = _format_message(q)
-    await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
+    if q.image_url:
+        try:
+            await bot.send_photo(
+                GROUP_ID,
+                photo=q.image_url,
+                caption=msg,
+                parse_mode="HTML",
+            )
+        except Exception:
+            # Fallback: send text only if image fails
+            await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
+    else:
+        await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
     await mark_as_sent(q.id)
     logger.info("Sent question id=%d ('%s') to group %s.", q.id, q.link, GROUP_ID)
 

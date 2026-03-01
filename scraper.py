@@ -163,6 +163,29 @@ async def _fetch_single_question(
             }
         """)
 
+        # Collect content image URL (Раздаточный материал), if any.
+        # Look for <img> tags inside the content area, skip tiny icons.
+        image_url: str | None = None
+        try:
+            imgs = await q_page.locator("main img, article img, [class*='question'] img").all()
+            for img in imgs:
+                src = await img.get_attribute("src") or ""
+                if not src or src.startswith("data:"):
+                    continue
+                # Skip tiny icon images
+                w = await img.get_attribute("width") or ""
+                h = await img.get_attribute("height") or ""
+                if w and int(w) < 64:
+                    continue
+                if h and int(h) < 64:
+                    continue
+                if not src.startswith("http"):
+                    src = BASE_URL + src if src.startswith("/") else BASE_URL + "/" + src
+                image_url = src
+                break
+        except Exception as exc:
+            logger.debug("Image extraction failed at %s: %s", question_url, exc)
+
         # Get page text — try scoped content area first, fallback to body
         content_sel = q_page.locator("main, article, [class*='question']").first
         if await content_sel.count():
@@ -189,6 +212,7 @@ async def _fetch_single_question(
             "question_number": doc_q_number,
             "text": q_text,
             "answer": answer_text or None,
+            "image_url": image_url,
             "link": question_url,
             "is_sent": False,
         }
