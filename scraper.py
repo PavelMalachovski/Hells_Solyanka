@@ -262,7 +262,8 @@ def _clean_text(text: str) -> str:
         if line.startswith("·"):
             continue
         # Skip pack-header lines like "Балканфест — 2025 · ноябрь 2025"
-        if re.search(r'·\s+\w+\s+\d{4}', line):
+        # or "Куб-7. Март (2022/2023) · апр. 2023"
+        if re.search(r'·\s+\S+\s+\d{4}', line):
             continue
         # Skip author lines: "Автор: Имя Фамилия"
         if re.match(r'Авто?р\s*:', line, re.IGNORECASE):
