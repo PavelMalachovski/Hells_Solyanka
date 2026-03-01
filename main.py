@@ -193,7 +193,10 @@ async def cmd_questions(message: Message) -> None:
         "Нажми на вопрос чтобы посмотреть и отправить в группу.",
         parse_mode="HTML",
         reply_markup=kb,
-    ) ──────────────────────────────────────────────────────
+    )
+
+
+# ── callback: pagination ──────────────────────────────────────────────────────
 @router.callback_query(lambda c: c.data and c.data.startswith("q_page:"))
 async def cb_questions_page(callback: CallbackQuery) -> None:
     _, page_str, filter_flag = callback.data.split(":")
