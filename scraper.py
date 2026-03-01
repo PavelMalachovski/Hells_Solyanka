@@ -152,23 +152,19 @@ async def _fetch_single_question(
 
         # Remove nav / header / footer DOM elements so their icon-name text
         # ("search", "quiz", "casino" …) doesn't pollute extracted content.
+        # NOTE: only remove safe, clearly-non-content elements.
         await q_page.evaluate("""
             () => {
-                const remove = [
-                    'nav', 'header', 'footer',
-                    '[class*="app-bar"]', '[class*="toolbar"]',
-                    '[class*="navbar"]', '[class*="nav-"]',
-                    '[class*="cookie"]', '[class*="consent"]',
-                    '[class*="banner"]',
-                ];
-                remove.forEach(sel =>
-                    document.querySelectorAll(sel).forEach(el => el.remove())
-                );
+                ['nav', 'footer', 'mat-toolbar',
+                 '[class*="cookie"]', '[class*="consent"]', '[class*="banner"]']
+                    .forEach(sel =>
+                        document.querySelectorAll(sel).forEach(el => el.remove())
+                    );
             }
         """)
 
         # Get page text — try scoped content area first, fallback to body
-        content_sel = q_page.locator("main, article, [class*='content'], [class*='question']").first
+        content_sel = q_page.locator("main, article, [class*='question']").first
         if await content_sel.count():
             body_text = await content_sel.inner_text()
         else:
@@ -180,7 +176,11 @@ async def _fetch_single_question(
         answer_text = _clean_text(answer_text)
 
         if not q_text:
-            logger.warning("No question text found at %s", question_url)
+            logger.warning(
+                "No question text found at %s | raw snippet: %r",
+                question_url,
+                body_text[:300],
+            )
             return None
 
         return {
