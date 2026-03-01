@@ -113,3 +113,25 @@ async def count_questions(unsent_only: bool = False) -> int:
             stmt = stmt.where(Question.is_sent == False)  # noqa: E712
         result = await session.execute(stmt)
         return result.scalar_one()
+
+
+PAGE_SIZE = 5
+
+
+async def get_questions_paged(
+    page: int = 0,
+    unsent_only: bool = True,
+) -> list[Question]:
+    """Return PAGE_SIZE questions for the given page (0-indexed)."""
+    async with async_session_factory() as session:
+        stmt = select(Question).order_by(Question.id)
+        if unsent_only:
+            stmt = stmt.where(Question.is_sent == False)  # noqa: E712
+        stmt = stmt.offset(page * PAGE_SIZE).limit(PAGE_SIZE)
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+
+async def get_question_by_id(question_id: int) -> Question | None:
+    async with async_session_factory() as session:
+        return await session.get(Question, question_id)

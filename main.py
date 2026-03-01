@@ -15,12 +15,25 @@ import asyncio
 import logging
 import os
 
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import Bot, Dispatcher, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from database import count_questions, init_db
-from scheduler import ADMIN_ID, GROUP_ID, build_scheduler, send_question
+from database import (
+    PAGE_SIZE,
+    count_questions,
+    get_question_by_id,
+    get_questions_paged,
+    init_db,
+    mark_as_sent,
+)
+from scheduler import ADMIN_ID, GROUP_ID, _format_message, build_scheduler, send_question
 from scraper import FIRST_PACK_ID, scrape_all_packs, scrape_first_pack
 
 logging.basicConfig(
@@ -46,6 +59,82 @@ def _is_admin(user_id: int) -> bool:
 # Handlers
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Keyboard builders
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _questions_kb(
+    questions: list,
+    page: int,
+    total: int,
+    unsent_only: bool,
+) -> InlineKeyboardMarkup:
+    """Build inline keyboard for the questions list view."""
+    builder = InlineKeyboardBuilder()
+    filter_flag = "1" if unsent_only else "0"
+
+    for q in questions:
+        short = q.text[:55].replace("\n", " ")
+        if len(q.text) > 55:
+            short += "…"
+        sent_mark = "✅ " if q.is_sent else ""
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{sent_mark}#{q.id} В{q.question_number} {short}",
+                callback_data=f"q_view:{q.id}:{page}:{filter_flag}",
+            )
+        )
+
+    # Pagination row
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"q_page:{page-1}:{filter_flag}"))
+
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    nav.append(
+        InlineKeyboardButton(
+            text=f"{page + 1}/{total_pages}",
+            callback_data="noop",
+        )
+    )
+
+    if (page + 1) * PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"q_page:{page+1}:{filter_flag}"))
+
+    builder.row(*nav)
+
+    # Filter toggle
+    toggle_label = "👁 Показать все" if unsent_only else "🔲 Только неотправленные"
+    toggle_flag = "0" if unsent_only else "1"
+    builder.row(
+        InlineKeyboardButton(text=toggle_label, callback_data=f"q_page:0:{toggle_flag}")
+    )
+
+    return builder.as_markup()
+
+
+def _question_detail_kb(q_id: int, page: int, filter_flag: str) -> InlineKeyboardMarkup:
+    """Keyboard for a single question: send to group + back."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="📤 Отправить в группу",
+            callback_data=f"q_send:{q_id}:{page}:{filter_flag}",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="◀️ Назад к списку",
+            callback_data=f"q_page:{page}:{filter_flag}",
+        )
+    )
+    return builder.as_markup()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handlers
+# ─────────────────────────────────────────────────────────────────────────────
+
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
     total = await count_questions()
@@ -56,9 +145,10 @@ async def cmd_start(message: Message) -> None:
         f"Ещё не отправлено: <b>{unsent}</b>\n\n"
         "Команды:\n"
         "/status — статистика базы\n"
+        "/questions — просмотр вопросов и отправка в группу\n"
         "/parse — запарсить Балканфест-2025 (только для админа)\n"
         "/parse_all — запарсить ВСЕ 6 550 пакетов (только для админа)\n"
-        "/send_now — отправить вопрос прямо сейчас (только для админа)",
+        "/send_now — отправить случайный вопрос прямо сейчас (только для админа)",
         parse_mode="HTML",
     )
 
@@ -75,6 +165,131 @@ async def cmd_status(message: Message) -> None:
         f"Ожидают отправки: <b>{unsent}</b>",
         parse_mode="HTML",
     )
+
+
+@router.message(Command("questions"))
+async def cmd_questions(message: Message) -> None:
+    """List questions with inline pagination and per-question send button."""
+    page = 0
+    unsent_only = True
+    questions = await get_questions_paged(page=page, unsent_only=unsent_only)
+    total = await count_questions(unsent_only=unsent_only)
+
+    if not questions:
+        await message.answer(
+            "📭 Нет вопросов в базе.\nЗапусти /parse чтобы загрузить."
+        )
+        return
+
+    kb = _questions_kb(questions, page, total, unsent_only)
+    await message.answer(
+        f"📋 <b>Вопросы</b> (неотправленных: <b>{total}</b>)\n"
+        "Нажми на вопрос чтобы посмотреть и отправить в группу.",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
+# ── callback: pagination ──────────────────────────────────────────────────────
+@router.callback_query(lambda c: c.data and c.data.startswith("q_page:"))
+async def cb_questions_page(callback: CallbackQuery) -> None:
+    _, page_str, filter_flag = callback.data.split(":")
+    page = int(page_str)
+    unsent_only = filter_flag == "1"
+
+    questions = await get_questions_paged(page=page, unsent_only=unsent_only)
+    total = await count_questions(unsent_only=unsent_only)
+
+    if not questions and page > 0:
+        # Went past last page after sending — step back
+        page = max(0, page - 1)
+        questions = await get_questions_paged(page=page, unsent_only=unsent_only)
+
+    kb = _questions_kb(questions, page, total, unsent_only)
+    label = "неотправленных" if unsent_only else "всего"
+    await callback.message.edit_text(
+        f"📋 <b>Вопросы</b> ({label}: <b>{total}</b>)\n"
+        "Нажми на вопрос чтобы посмотреть и отправить в группу.",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+# ── callback: view single question ───────────────────────────────────────────
+@router.callback_query(lambda c: c.data and c.data.startswith("q_view:"))
+async def cb_question_view(callback: CallbackQuery) -> None:
+    _, q_id_str, page_str, filter_flag = callback.data.split(":")
+    q = await get_question_by_id(int(q_id_str))
+    page = int(page_str)
+
+    if q is None:
+        await callback.answer("Вопрос не найден.", show_alert=True)
+        return
+
+    import html as _html
+    sent_status = "✅ уже отправлен" if q.is_sent else "🔲 не отправлен"
+    text = (
+        f"📚 <b>{_html.escape(q.pack_name)}</b>  |  Вопрос {q.question_number}\n"
+        f"{'─' * 30}\n\n"
+        f"{_html.escape(q.text)}"
+    )
+    if q.answer:
+        text += f"\n\n<tg-spoiler>💡 <b>Ответ:</b> {_html.escape(q.answer)}</tg-spoiler>"
+    text += f"\n\n<i>Статус: {sent_status}</i>"
+
+    kb = _question_detail_kb(q.id, page, filter_flag)
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ── callback: send question to group ─────────────────────────────────────────
+@router.callback_query(lambda c: c.data and c.data.startswith("q_send:"))
+async def cb_send_to_group(callback: CallbackQuery, bot: Bot) -> None:
+    if not _is_admin(callback.from_user.id):
+        await callback.answer("⛔ Только для администратора.", show_alert=True)
+        return
+
+    _, q_id_str, page_str, filter_flag = callback.data.split(":")
+    q = await get_question_by_id(int(q_id_str))
+
+    if q is None:
+        await callback.answer("Вопрос не найден.", show_alert=True)
+        return
+
+    if q.is_sent:
+        await callback.answer("Этот вопрос уже был отправлен.", show_alert=True)
+        return
+
+    msg = _format_message(q)
+    await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
+    await mark_as_sent(q.id)
+    logger.info("Manually sent question id=%d to group %s.", q.id, GROUP_ID)
+
+    await callback.answer("✅ Отправлено в группу!", show_alert=False)
+
+    # Refresh back to the list
+    page = int(page_str)
+    unsent_only = filter_flag == "1"
+    questions = await get_questions_paged(page=page, unsent_only=unsent_only)
+    total = await count_questions(unsent_only=unsent_only)
+    if not questions and page > 0:
+        page -= 1
+        questions = await get_questions_paged(page=page, unsent_only=unsent_only)
+    kb = _questions_kb(questions, page, total, unsent_only)
+    label = "неотправленных" if unsent_only else "всего"
+    await callback.message.edit_text(
+        f"📋 <b>Вопросы</b> ({label}: <b>{total}</b>)\n"
+        "Нажми на вопрос чтобы посмотреть и отправить в группу.",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
+# ── callback: noop (page counter button) ─────────────────────────────────────
+@router.callback_query(lambda c: c.data == "noop")
+async def cb_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
 
 
 @router.message(Command("parse"))
