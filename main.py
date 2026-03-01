@@ -349,26 +349,32 @@ async def cmd_send_now(message: Message, bot: Bot) -> None:
 
 async def _background_parse(bot: Bot) -> None:
     """Parse Балканфест-2025 in the background; notify admin when done."""
+    inserted = 0
+    parse_ok = False
     try:
         inserted = await scrape_first_pack()
         logger.info("Background auto-parse complete: %d questions inserted.", inserted)
-        if ADMIN_ID:
-            await bot.send_message(
-                ADMIN_ID,
-                f"✅ <b>Авто-парсинг завершён!</b>\nДобавлено вопросов: <b>{inserted}</b>",
-                parse_mode="HTML",
-            )
+        parse_ok = True
     except Exception:
         logger.exception("Background auto-parse failed.")
-        if ADMIN_ID:
-            try:
+
+    # Notify admin — isolated so a failed DM never masks parse status
+    if ADMIN_ID:
+        try:
+            if parse_ok:
+                await bot.send_message(
+                    ADMIN_ID,
+                    f"✅ <b>Авто-парсинг завершён!</b>\nДобавлено вопросов: <b>{inserted}</b>",
+                    parse_mode="HTML",
+                )
+            else:
                 await bot.send_message(
                     ADMIN_ID,
                     "❌ <b>Авто-парсинг завершился с ошибкой.</b>\nПопробуй /parse вручную.",
                     parse_mode="HTML",
                 )
-            except Exception:
-                pass
+        except Exception as notify_err:
+            logger.warning("Could not notify admin after parse: %s", notify_err)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
