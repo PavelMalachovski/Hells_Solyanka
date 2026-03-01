@@ -141,10 +141,21 @@ async def _fetch_single_question(
         show_btn = q_page.locator("text=Показать ответ").first
         if await show_btn.count():
             await _js_click(q_page, show_btn)
-            await q_page.wait_for_timeout(600)
+            # Wait until the button text changes to "Скрыть ответ" (answer revealed)
+            try:
+                await q_page.locator("text=Скрыть ответ").first.wait_for(
+                    state="visible", timeout=5000
+                )
+            except Exception:
+                # Answer reveal may have worked anyway; proceed
+                await q_page.wait_for_timeout(800)
 
-        # Get the full page text and parse
-        body_text = await q_page.locator("body").inner_text()
+        # Get page text — try scoped content area first, fallback to body
+        content_sel = q_page.locator("main, article, [class*='content'], [class*='question']").first
+        if await content_sel.count():
+            body_text = await content_sel.inner_text()
+        else:
+            body_text = await q_page.locator("body").inner_text()
         q_text, answer_text = _split_question_answer(body_text, "")
 
         # Cleanup: remove navigation / footer noise
