@@ -344,6 +344,31 @@ async def cmd_send_now(message: Message, bot: Bot) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Background helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _background_parse(bot: Bot) -> None:
+    """Parse Балканфест-2025 in the background; notify admin when done."""
+    try:
+        inserted = await scrape_first_pack()
+        logger.info("Background auto-parse complete: %d questions inserted.", inserted)
+        if ADMIN_ID:
+            await bot.send_message(
+                ADMIN_ID,
+                f"✅ <b>Авто-парсинг завершён!</b>\nДобавлено вопросов: <b>{inserted}</b>",
+                parse_mode="HTML",
+            )
+    except Exception:
+        logger.exception("Background auto-parse failed.")
+        if ADMIN_ID:
+            await bot.send_message(
+                ADMIN_ID,
+                "❌ <b>Авто-парсинг завершился с ошибкой.</b>\nПопробуй /parse вручную.",
+                parse_mode="HTML",
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -357,18 +382,14 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(router)
 
-    # Auto-parse Балканфест on first launch if DB is empty
-    if total == 0:
-        logger.info("DB is empty — auto-parsing Балканфест-2025 on startup…")
-        try:
-            inserted = await scrape_first_pack()
-            logger.info("Auto-parse complete: %d questions inserted.", inserted)
-        except Exception:
-            logger.exception("Auto-parse failed on startup.")
-
     scheduler = build_scheduler(bot)
     scheduler.start()
     logger.info("Scheduler started. Will send questions 09–20 (Europe/Prague).")
+
+    # Auto-parse runs in the background so polling starts immediately
+    if total == 0:
+        logger.info("DB is empty — launching background auto-parse of Балканфест-2025…")
+        asyncio.create_task(_background_parse(bot))
 
     try:
         await dp.start_polling(
