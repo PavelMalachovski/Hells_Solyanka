@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    case,
     func,
     select,
 )
@@ -159,7 +160,7 @@ async def get_packs(unsent_only: bool = False) -> list[dict]:
                 Question.pack_link,
                 func.count().label("total"),
                 func.sum(
-                    func.cast(Question.is_sent == False, Integer)  # noqa: E712
+                    case((Question.is_sent == False, 1), else_=0)  # noqa: E712
                 ).label("unsent"),
             )
             .group_by(Question.pack_name, Question.pack_link)

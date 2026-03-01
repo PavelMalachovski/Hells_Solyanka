@@ -299,6 +299,20 @@ async def cb_send_to_group(callback: CallbackQuery, bot: Bot) -> None:
     )
 
 
+# ── fallback: old-style q_page callbacks (stale buttons from previous version)
+@router.callback_query(lambda c: c.data and c.data.startswith("q_page:"))
+async def cb_old_qpage(callback: CallbackQuery) -> None:
+    packs = await get_packs(unsent_only=True)
+    kb = _packs_kb(packs, unsent_only=True)
+    total_unsent = sum(p["unsent"] for p in packs)
+    await callback.message.edit_text(
+        f"📖 <b>Пакеты</b> (неотправленных всего: <b>{total_unsent}</b>)\n"
+        "Нажми на пакет чтобы выбрать вопрос.",
+        parse_mode="HTML", reply_markup=kb,
+    )
+    await callback.answer()
+
+
 # ── callback: noop (page counter button) ─────────────────────────────────────
 @router.callback_query(lambda c: c.data == "noop")
 async def cb_noop(callback: CallbackQuery) -> None:
@@ -472,7 +486,7 @@ async def main() -> None:
         nonlocal _scheduler
         _scheduler = build_scheduler(bot)
         _scheduler.start()
-        logger.info("Scheduler started. Will send questions 09–20 (Europe/Prague).")
+        logger.info("Scheduler started. Will send question at 10:00 (Europe/Prague).")
 
         if await count_questions() == 0:
             logger.info("DB is empty — launching background auto-parse of Балканфест-2025…")
