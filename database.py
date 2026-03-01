@@ -143,6 +143,108 @@ async def get_questions_paged(
         return list(result.scalars().all())
 
 
+# ── Pack-level helpers ────────────────────────────────────────────────────────
+
+async def get_packs(unsent_only: bool = False) -> list[dict]:
+    """
+    Return distinct packs ordered by pack_link, with question counts.
+    Each dict: {pack_name, pack_link, pack_id, total, unsent}
+    pack_id is extracted as the numeric suffix of pack_link.
+    """
+    import re as _re
+    async with async_session_factory() as session:
+        rows = await session.execute(
+            select(
+                Question.pack_name,
+                Question.pack_link,
+                func.count().label("total"),
+                func.sum(
+                    func.cast(Question.is_sent == False, Integer)  # noqa: E712
+                ).label("unsent"),
+            )
+            .group_by(Question.pack_name, Question.pack_link)
+            .order_by(Question.pack_link)
+        )
+        packs = []
+        for row in rows:
+            m = _re.search(r'/(\d+)$', row.pack_link or "")
+            pack_id = m.group(1) if m else row.pack_link
+            packs.append({
+                "pack_name": row.pack_name,
+                "pack_link": row.pack_link,
+                "pack_id": pack_id,
+                "total": row.total or 0,
+                "unsent": int(row.unsent or 0),
+            })
+        return packs
+
+
+async def get_questions_by_pack(
+    pack_link: str,
+    page: int = 0,
+    unsent_only: bool = True,
+) -> list[Question]:
+    async with async_session_factory() as session:
+        stmt = (
+            select(Question)
+            .where(Question.pack_link == pack_link)
+            .order_by(Question.question_number)
+        )
+        if unsent_only:
+            stmt = stmt.where(Question.is_sent == False)  # noqa: E712
+        stmt = stmt.offset(page * PAGE_SIZE).limit(PAGE_SIZE)
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+
+async def count_questions_by_pack(
+    pack_link: str,
+    unsent_only: bool = True,
+) -> int:
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.count())
+            .select_from(Question)
+            .where(Question.pack_link == pack_link)
+        )
+        if unsent_only:
+            stmt = stmt.where(Question.is_sent == False)  # noqa: E712
+        result = await session.execute(stmt)
+        return result.scalar_one()
+
+
+async def get_adjacent_in_pack(
+    question_id: int,
+    pack_link: str,
+    unsent_only: bool = True,
+) -> tuple[int | None, int | None]:
+    """Return (prev_id, next_id) within the same pack, ordered by question_number."""
+    async with async_session_factory() as session:
+        q_now = await session.get(Question, question_id)
+        if q_now is None:
+            return None, None
+        qnum = q_now.question_number
+
+        def _base():
+            s = (
+                select(Question.id)
+                .where(Question.pack_link == pack_link)
+                .order_by(Question.question_number)
+            )
+            if unsent_only:
+                s = s.where(Question.is_sent == False)  # noqa: E712
+            return s
+
+        prev_r = await session.execute(
+            _base().where(Question.question_number < qnum)
+            .order_by(Question.question_number.desc()).limit(1)
+        )
+        next_r = await session.execute(
+            _base().where(Question.question_number > qnum).limit(1)
+        )
+        return prev_r.scalar_one_or_none(), next_r.scalar_one_or_none()
+
+
 async def get_question_by_id(question_id: int) -> Question | None:
     async with async_session_factory() as session:
         return await session.get(Question, question_id)

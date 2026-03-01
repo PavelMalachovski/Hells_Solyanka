@@ -3,6 +3,7 @@ scheduler.py — APScheduler that sends one question per hour, 09:00–20:00 Pra
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import html
@@ -49,6 +50,18 @@ def _format_message(q) -> str:
     )
 
 
+def _download_image_sync(url: str) -> bytes | None:
+    """Blocking download of image bytes (run in thread)."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.read()
+    except Exception as exc:
+        logger.warning("Image download failed %s: %s", url, exc)
+        return None
+
+
 async def send_question(bot: Bot) -> None:
     """Pick a random unsent question and send it to the group."""
     q = await get_random_unsent()
@@ -67,20 +80,24 @@ async def send_question(bot: Bot) -> None:
 
     msg = _format_message(q)
     if q.image_url:
-        try:
-            await bot.send_photo(
-                GROUP_ID,
-                photo=q.image_url,
-                caption=msg,
-                parse_mode="HTML",
-            )
-        except Exception:
-            # Fallback: send text only if image fails
-            await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
-    else:
-        await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
+        data = await asyncio.to_thread(_download_image_sync, q.image_url)
+        if data:
+            try:
+                from aiogram.types import BufferedInputFile
+                await bot.send_photo(
+                    GROUP_ID,
+                    photo=BufferedInputFile(data, filename="image.jpg"),
+                    caption=msg,
+                    parse_mode="HTML",
+                )
+                await mark_as_sent(q.id)
+                logger.info("Sent question id=%d with photo.", q.id)
+                return
+            except Exception as exc:
+                logger.warning("send_photo failed, falling back to text: %s", exc)
+    await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
     await mark_as_sent(q.id)
-    logger.info("Sent question id=%d ('%s') to group %s.", q.id, q.link, GROUP_ID)
+    logger.info("Sent question id=%d.", q.id)
 
 
 def build_scheduler(bot: Bot) -> AsyncIOScheduler:
@@ -90,11 +107,11 @@ def build_scheduler(bot: Bot) -> AsyncIOScheduler:
     """
     scheduler = AsyncIOScheduler(timezone=TZ)
 
-    # Fire at 9,10,11,12,13,14,15,16,17,18,19,20 o'clock every day
+    # Fire only at 10:00 Prague time every day
     scheduler.add_job(
         send_question,
         trigger=CronTrigger(
-            hour="9-20",
+            hour="10",
             minute="0",
             timezone=TZ,
         ),
