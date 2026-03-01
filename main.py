@@ -361,11 +361,14 @@ async def _background_parse(bot: Bot) -> None:
     except Exception:
         logger.exception("Background auto-parse failed.")
         if ADMIN_ID:
-            await bot.send_message(
-                ADMIN_ID,
-                "❌ <b>Авто-парсинг завершился с ошибкой.</b>\nПопробуй /parse вручную.",
-                parse_mode="HTML",
-            )
+            try:
+                await bot.send_message(
+                    ADMIN_ID,
+                    "❌ <b>Авто-парсинг завершился с ошибкой.</b>\nПопробуй /parse вручную.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -382,22 +385,34 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(router)
 
-    scheduler = build_scheduler(bot)
-    scheduler.start()
-    logger.info("Scheduler started. Will send questions 09–20 (Europe/Prague).")
+    # ── Startup hook: fires after polling connects, inside the running loop ──
+    _scheduler = None
 
-    # Auto-parse runs in the background so polling starts immediately
-    if total == 0:
-        logger.info("DB is empty — launching background auto-parse of Балканфест-2025…")
-        asyncio.create_task(_background_parse(bot))
+    @dp.startup()
+    async def on_startup() -> None:
+        nonlocal _scheduler
+        _scheduler = build_scheduler(bot)
+        _scheduler.start()
+        logger.info("Scheduler started. Will send questions 09–20 (Europe/Prague).")
+
+        if await count_questions() == 0:
+            logger.info("DB is empty — launching background auto-parse of Балканфест-2025…")
+            asyncio.get_event_loop().create_task(_background_parse(bot))
+
+    # ── Shutdown hook ────────────────────────────────────────────────────────
+    @dp.shutdown()
+    async def on_shutdown() -> None:
+        if _scheduler:
+            _scheduler.shutdown(wait=False)
 
     try:
         await dp.start_polling(
             bot,
             allowed_updates=["message", "callback_query"],
         )
+    except Exception:
+        logger.exception("Polling crashed!")
     finally:
-        scheduler.shutdown()
         await bot.session.close()
 
 
