@@ -25,8 +25,13 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 DATABASE_URL: str = os.environ["DATABASE_URL"]
-# Railway gives a postgres:// URL; asyncpg needs postgresql+asyncpg://
-DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+# Normalise to the asyncpg dialect regardless of what Railway provides:
+#   postgres://...        -> postgresql+asyncpg://...
+#   postgresql://...      -> postgresql+asyncpg://...
+#   postgresql+asyncpg:// -> unchanged
+if "+" not in DATABASE_URL.split("://")[0]:
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 
 engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
