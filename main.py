@@ -127,8 +127,10 @@ def _question_detail_kb(
     prev_id: int | None = None,
     next_id: int | None = None,
     has_answer: bool = False,
+    answer_shown: bool = False,
+    has_source: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Keyboard for a single question: prev/next, show answer, send to group, back to pack."""
+    """Keyboard for a single question: prev/next, show answer, show source, send to group, back."""
     builder = InlineKeyboardBuilder()
     nav: list[InlineKeyboardButton] = []
     if prev_id is not None:
@@ -143,10 +145,15 @@ def _question_detail_kb(
         ))
     if nav:
         builder.row(*nav)
-    if has_answer:
+    if has_answer and not answer_shown:
         builder.row(InlineKeyboardButton(
             text="💡 Показать ответ",
             callback_data=f"q_ans:{q_id}:{pack_id}:{page}:{filter_flag}",
+        ))
+    if answer_shown and has_source:
+        builder.row(InlineKeyboardButton(
+            text="📎 Показать источник",
+            callback_data=f"q_src:{q_id}:{pack_id}:{page}:{filter_flag}",
         ))
     builder.row(InlineKeyboardButton(
         text="📤 Отправить в группу",
@@ -316,10 +323,24 @@ async def cb_show_answer(callback: CallbackQuery) -> None:
         q.id, pack_id, page, filter_flag,
         prev_id=prev_id, next_id=next_id,
         has_answer=True,
+        answer_shown=True,
+        has_source=bool(q.source),
     )
 
     await callback.message.edit_text(text_with_answer, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
+
+
+# ── callback: show source ────────────────────────────────────────────────────────────────
+@router.callback_query(lambda c: c.data and c.data.startswith("q_src:"))
+async def cb_show_source(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":")
+    q_id = int(parts[1])
+    q = await get_question_by_id(q_id)
+    if q is None or not q.source:
+        await callback.answer("Источник не найден.", show_alert=True)
+        return
+    await callback.answer(q.source, show_alert=True)
 
 
 # ── callback: send question to group ─────────────────────────────────────────

@@ -53,6 +53,7 @@ class Question(Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     image_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    source: Mapped[str | None] = mapped_column(Text, nullable=True)
     link: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -73,9 +74,12 @@ async def init_db() -> None:
     from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Idempotent migration: add image_url if upgrading from older schema
+        # Idempotent migrations for older schemas
         await conn.execute(text(
             "ALTER TABLE questions ADD COLUMN IF NOT EXISTS image_url VARCHAR(1024)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE questions ADD COLUMN IF NOT EXISTS source TEXT"
         ))
 
 

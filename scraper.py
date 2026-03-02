@@ -164,40 +164,34 @@ async def _fetch_single_question(
         """)
 
         # Collect content image URL (Раздаточный материал), if any.
-        # Look for <img> tags inside the content area, skip tiny icons.
+        # Use JS naturalWidth/Height — works reliably regardless of Angular component structure.
         image_url: str | None = None
         try:
-            imgs = await q_page.locator("main img, article img, [class*='question'] img").all()
-            for img in imgs:
-                src = await img.get_attribute("src") or ""
-                if not src or src.startswith("data:") or src.endswith(".svg"):
-                    continue
-                # Skip tiny icon images — use rendered bounding box (reliable),
-                # fall back to width/height attributes parsed safely.
-                try:
-                    box = await img.bounding_box()
-                    if box is not None:
-                        if box["width"] < 64 or box["height"] < 64:
-                            continue
-                    else:
-                        # Not rendered yet — try attributes
-                        def _safe_dim(val: str) -> int | None:
-                            try:
-                                return int("".join(c for c in val if c.isdigit()) or "0") or None
-                            except Exception:
-                                return None
-                        w = _safe_dim(await img.get_attribute("width") or "")
-                        h = _safe_dim(await img.get_attribute("height") or "")
-                        if w is not None and w < 64:
-                            continue
-                        if h is not None and h < 64:
-                            continue
-                except Exception:
-                    pass  # Can't determine size — include the image
-                if not src.startswith("http"):
-                    src = BASE_URL + src if src.startswith("/") else BASE_URL + "/" + src
-                image_url = src
-                break
+            image_url = await q_page.evaluate(f"""
+                () => {{
+                    const base = '{BASE_URL}';
+                    const imgs = Array.from(document.querySelectorAll('img'));
+                    for (const img of imgs) {{
+                        let src = img.src || img.getAttribute('src') || '';
+                        if (!src || src.startsWith('data:') || src.endsWith('.svg')) continue;
+                        // Prefer naturalWidth (set once image is loaded)
+                        const nw = img.naturalWidth || 0;
+                        const nh = img.naturalHeight || 0;
+                        if (nw > 0 && nh > 0) {{
+                            if (nw < 100 || nh < 100) continue;
+                        }} else {{
+                            // Fall back to rendered rect
+                            const r = img.getBoundingClientRect();
+                            if (r.width > 0 && r.height > 0 && (r.width < 100 || r.height < 100)) continue;
+                        }}
+                        if (!src.startsWith('http')) {{
+                            src = src.startsWith('/') ? base + src : base + '/' + src;
+                        }}
+                        return src;
+                    }}
+                    return null;
+                }}
+            """)
         except Exception as exc:
             logger.debug("Image extraction failed at %s: %s", question_url, exc)
 
@@ -208,6 +202,9 @@ async def _fetch_single_question(
         else:
             body_text = await q_page.locator("body").inner_text()
         q_text, answer_text = _split_question_answer(body_text, "")
+
+        # Extract source BEFORE _clean_text strips it
+        source = _extract_source(answer_text)
 
         # Cleanup: remove navigation / footer noise
         q_text = _clean_text(q_text)
@@ -228,6 +225,7 @@ async def _fetch_single_question(
             "text": q_text,
             "answer": answer_text or None,
             "image_url": image_url,
+            "source": source,
             "link": question_url,
             "is_sent": False,
         }
@@ -244,6 +242,28 @@ _NAV_ICON_WORDS: frozenset[str] = frozenset({
     "more_vert", "more_horiz", "menu", "close", "arrow_back",
     "arrow_forward", "home", "person", "settings", "info",
 })
+
+def _extract_source(text: str) -> str | None:
+    """
+    Extract source lines (everything under «Источники:») from raw answer block,
+    before _clean_text discards them.
+    """
+    sources: list[str] = []
+    collecting = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if re.match(r'Источники?\s*:', line, re.IGNORECASE):
+            collecting = True
+            after = re.sub(r'^Источники?\s*:\s*', '', line, flags=re.IGNORECASE).strip()
+            if after:
+                sources.append(after)
+            continue
+        if collecting:
+            if not line or re.match(r'Авто?\u0440', line, re.IGNORECASE):
+                break
+            sources.append(line)
+    return "\n".join(sources) if sources else None
+
 
 _NOISE_PHRASES: list[str] = [
     "Показать ответ", "Скрыть ответ",
