@@ -157,23 +157,44 @@ async def send_question(bot: Bot) -> None:
     logger.info("Sent question id=%d.", q.id)
 
 
+async def send_morning_questions(bot: Bot) -> None:
+    """Send a morning greeting and 4 questions to the group at 10:00."""
+    await bot.send_message(GROUP_ID, "Доброе утро, Аццкая Солянка 🔥", parse_mode="HTML")
+    for _ in range(4):
+        await send_question(bot)
+
+
+async def send_evening_questions(bot: Bot) -> None:
+    """Send an evening greeting and 4 questions to the group at 20:00."""
+    await bot.send_message(GROUP_ID, "Добрый вечер, Аццкая Солянка 🔥", parse_mode="HTML")
+    for _ in range(4):
+        await send_question(bot)
+
+
 def build_scheduler(bot: Bot) -> AsyncIOScheduler:
     """
     Create and configure the scheduler.
-    Jobs fire every hour at :00 minutes, between 09:00 and 20:00 Prague time.
+    Sends 4 questions with a greeting at 10:00 and 20:00 Prague time.
     """
     scheduler = AsyncIOScheduler(timezone=TZ)
 
-    # Fire only at 10:00 Prague time every day
+    # Morning block: greeting + 4 questions at 10:00
     scheduler.add_job(
-        send_question,
-        trigger=CronTrigger(
-            hour="10",
-            minute="0",
-            timezone=TZ,
-        ),
+        send_morning_questions,
+        trigger=CronTrigger(hour="10", minute="0", timezone=TZ),
         kwargs={"bot": bot},
-        id="send_question",
+        id="send_morning_questions",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+
+    # Evening block: greeting + 4 questions at 20:00
+    scheduler.add_job(
+        send_evening_questions,
+        trigger=CronTrigger(hour="20", minute="0", timezone=TZ),
+        kwargs={"bot": bot},
+        id="send_evening_questions",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=300,
