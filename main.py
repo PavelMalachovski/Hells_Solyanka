@@ -407,37 +407,15 @@ async def cb_show_source(callback: CallbackQuery) -> None:
         pass
     await callback.answer()
 
-# ── group callbacks: show/hide answer, show source (for messages in group) ──────────
+# ── group callbacks: answer and source as private popups (only visible to the tapper) ───
 @router.callback_query(lambda c: c.data and c.data.startswith("gq_ans:"))
 async def cb_group_show_answer(callback: CallbackQuery) -> None:
     q_id = int(callback.data.split(":")[1])
     q = await get_question_by_id(q_id)
-    if q is None:
+    if q is None or not q.answer:
         await callback.answer("Вопрос не найден.", show_alert=True)
         return
-    text = _build_group_text(q, answer_shown=True)
-    kb = _group_question_kb(q_id, has_answer=True, answer_shown=True, has_source=bool(q.source))
-    try:
-        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    except TelegramBadRequest:
-        pass
-    await callback.answer()
-
-
-@router.callback_query(lambda c: c.data and c.data.startswith("gq_hide:"))
-async def cb_group_hide_answer(callback: CallbackQuery) -> None:
-    q_id = int(callback.data.split(":")[1])
-    q = await get_question_by_id(q_id)
-    if q is None:
-        await callback.answer("Вопрос не найден.", show_alert=True)
-        return
-    text = _build_group_text(q)
-    kb = _group_question_kb(q_id, has_answer=bool(q.answer), has_source=bool(q.source))
-    try:
-        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    except TelegramBadRequest:
-        pass
-    await callback.answer()
+    await callback.answer(f"💡 Ответ: {q.answer}", show_alert=True)
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("gq_src:"))
@@ -447,13 +425,7 @@ async def cb_group_show_source(callback: CallbackQuery) -> None:
     if q is None or not q.source:
         await callback.answer("Источник не найден.", show_alert=True)
         return
-    text = _build_group_text(q, answer_shown=True, source_shown=True)
-    kb = _group_question_kb(q_id, has_answer=True, answer_shown=True, has_source=True, source_shown=True)
-    try:
-        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    except TelegramBadRequest:
-        pass
-    await callback.answer()
+    await callback.answer(f"📎 Источник:\n{q.source}", show_alert=True)
 
 # ── callback: send question to group ─────────────────────────────────────────
 @router.callback_query(lambda c: c.data and c.data.startswith("q_send:"))

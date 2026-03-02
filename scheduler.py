@@ -85,23 +85,16 @@ def _build_group_text(
 def _group_question_kb(
     q_id: int,
     has_answer: bool = False,
-    answer_shown: bool = False,
     has_source: bool = False,
-    source_shown: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Minimal keyboard for group messages: show/hide answer, show source."""
+    """Keyboard for group messages: show answer and source as private popups."""
     builder = InlineKeyboardBuilder()
-    if has_answer and not answer_shown:
+    if has_answer:
         builder.row(InlineKeyboardButton(
             text="💡 Показать ответ",
             callback_data=f"gq_ans:{q_id}",
         ))
-    if answer_shown:
-        builder.row(InlineKeyboardButton(
-            text="🙈 Скрыть ответ",
-            callback_data=f"gq_hide:{q_id}",
-        ))
-    if answer_shown and has_source and not source_shown:
+    if has_source:
         builder.row(InlineKeyboardButton(
             text="📎 Показать источник",
             callback_data=f"gq_src:{q_id}",
