@@ -41,7 +41,7 @@ from database import (
     init_db,
     mark_as_sent,
 )
-from scheduler import ADMIN_ID, GROUP_ID, _format_message, build_scheduler, send_question
+from scheduler import ADMIN_ID, GROUP_ID, _build_group_text, _group_question_kb, build_scheduler, send_question
 from scraper import BASE_URL, FIRST_PACK_ID, scrape_all_packs, scrape_first_pack, scrape_pack
 
 logging.basicConfig(
@@ -237,27 +237,32 @@ def _download_image_sync(url: str) -> bytes | None:
         return None
 
 
-async def _send_with_image(bot: Bot, chat_id: str | int, msg: str, image_url: str | None) -> None:
+async def _send_with_image(
+    bot: Bot,
+    chat_id: str | int,
+    msg: str,
+    image_url: str | None,
+    reply_markup=None,
+) -> None:
     """Send message to chat, attaching image as uploaded bytes if available."""
     if image_url:
         data = await asyncio.to_thread(_download_image_sync, image_url)
         if data:
             try:
-                # Telegram caption limit is 1024 chars; truncate if needed
                 caption = msg if len(msg) <= 1024 else msg[:1021] + "…"
                 await bot.send_photo(
                     chat_id,
                     photo=BufferedInputFile(data, filename="image.jpg"),
                     caption=caption,
                     parse_mode="HTML",
+                    reply_markup=reply_markup,
                 )
-                # Send full text as follow-up if caption was truncated
                 if len(msg) > 1024:
                     await bot.send_message(chat_id, msg, parse_mode="HTML")
                 return
             except Exception as exc:
                 logger.warning("send_photo failed: %s", exc)
-    await bot.send_message(chat_id, msg, parse_mode="HTML")
+    await bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=reply_markup)
 
 
 @router.message(Command("start"))
@@ -402,6 +407,53 @@ async def cb_show_source(callback: CallbackQuery) -> None:
         pass
     await callback.answer()
 
+# ── group callbacks: show/hide answer, show source (for messages in group) ──────────
+@router.callback_query(lambda c: c.data and c.data.startswith("gq_ans:"))
+async def cb_group_show_answer(callback: CallbackQuery) -> None:
+    q_id = int(callback.data.split(":")[1])
+    q = await get_question_by_id(q_id)
+    if q is None:
+        await callback.answer("Вопрос не найден.", show_alert=True)
+        return
+    text = _build_group_text(q, answer_shown=True)
+    kb = _group_question_kb(q_id, has_answer=True, answer_shown=True, has_source=bool(q.source))
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("gq_hide:"))
+async def cb_group_hide_answer(callback: CallbackQuery) -> None:
+    q_id = int(callback.data.split(":")[1])
+    q = await get_question_by_id(q_id)
+    if q is None:
+        await callback.answer("Вопрос не найден.", show_alert=True)
+        return
+    text = _build_group_text(q)
+    kb = _group_question_kb(q_id, has_answer=bool(q.answer), has_source=bool(q.source))
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("gq_src:"))
+async def cb_group_show_source(callback: CallbackQuery) -> None:
+    q_id = int(callback.data.split(":")[1])
+    q = await get_question_by_id(q_id)
+    if q is None or not q.source:
+        await callback.answer("Источник не найден.", show_alert=True)
+        return
+    text = _build_group_text(q, answer_shown=True, source_shown=True)
+    kb = _group_question_kb(q_id, has_answer=True, answer_shown=True, has_source=True, source_shown=True)
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 # ── callback: send question to group ─────────────────────────────────────────
 @router.callback_query(lambda c: c.data and c.data.startswith("q_send:"))
@@ -422,8 +474,9 @@ async def cb_send_to_group(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer("Этот вопрос уже был отправлен.", show_alert=True)
         return
 
-    msg = _format_message(q)
-    await _send_with_image(bot, GROUP_ID, msg, q.image_url)
+    msg = _build_group_text(q)
+    kb = _group_question_kb(q.id, has_answer=bool(q.answer), has_source=bool(q.source))
+    await _send_with_image(bot, GROUP_ID, msg, q.image_url, reply_markup=kb)
     await mark_as_sent(q.id)
     logger.info("Manually sent question id=%d to group.", q.id)
     await callback.answer("✅ Отправлено в группу!", show_alert=False)

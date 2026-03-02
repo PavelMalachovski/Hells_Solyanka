@@ -7,8 +7,11 @@ import asyncio
 import logging
 import os
 import html
+import re
 
 from aiogram import Bot
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -25,29 +28,85 @@ TZ = "Europe/Prague"
 
 
 def _format_message(q) -> str:
-    """
-    Build a Telegram HTML message with the answer hidden behind a spoiler.
-    Pattern:
-        📚 <b>Pack Name</b>  |  Вопрос N
-        ─────────────────
-        <question text>
-
-        <tg-spoiler>💡 <b>Ответ:</b> answer text</tg-spoiler>
-    """
+    """Legacy: plain text for backward compat. Use _build_group_text for new sends."""
     pack = html.escape(q.pack_name)
     text = html.escape(q.text)
-    answer_part = (
-        f"\n\n<tg-spoiler>💡 <b>Ответ:</b> {html.escape(q.answer)}</tg-spoiler>"
-        if q.answer
-        else ""
-    )
     qnum = q.question_number or "?"
-    return (
+    result = (
         f"📚 <b>{pack}</b>  |  Вопрос {qnum}\n"
         f"{'─' * 30}\n\n"
         f"{text}"
-        f"{answer_part}"
     )
+    if q.image_url:
+        result += f'\n\n🖼 <a href="{q.image_url}">Раздаточный материал</a>'
+    return result
+
+
+def _format_source_html_group(source: str) -> str:
+    """Wrap bare URLs in <a href> for clickability; escape plain text lines."""
+    lines = []
+    for line in source.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r'^(\d+\.\s*)(https?://\S+)$', line)
+        if m:
+            lines.append(f'{m.group(1)}<a href="{m.group(2)}">{m.group(2)}</a>')
+        elif re.match(r'^https?://', line):
+            lines.append(f'<a href="{line}">{line}</a>')
+        else:
+            lines.append(html.escape(line))
+    return "\n".join(lines)
+
+
+def _build_group_text(
+    q,
+    answer_shown: bool = False,
+    source_shown: bool = False,
+) -> str:
+    """Build group message text (question only, optionally with answer/source)."""
+    pack = html.escape(q.pack_name)
+    text = html.escape(q.text)
+    qnum = q.question_number or "?"
+    result = (
+        f"📚 <b>{pack}</b>  |  Вопрос {qnum}\n"
+        f"{'─' * 30}\n\n"
+        f"{text}"
+    )
+    if q.image_url:
+        result += f'\n\n🖼 <a href="{q.image_url}">Раздаточный материал</a>'
+    if answer_shown and q.answer:
+        result += f"\n\n💡 <b>Ответ:</b> {html.escape(q.answer)}"
+    if source_shown and q.source:
+        result += f"\n\n📎 <b>Источник:</b>\n{_format_source_html_group(q.source)}"
+    return result
+
+
+def _group_question_kb(
+    q_id: int,
+    has_answer: bool = False,
+    answer_shown: bool = False,
+    has_source: bool = False,
+    source_shown: bool = False,
+) -> InlineKeyboardMarkup:
+    """Minimal keyboard for group messages: show/hide answer, show source."""
+    builder = InlineKeyboardBuilder()
+    if has_answer and not answer_shown:
+        builder.row(InlineKeyboardButton(
+            text="💡 Показать ответ",
+            callback_data=f"gq_ans:{q_id}",
+        ))
+    if answer_shown:
+        builder.row(InlineKeyboardButton(
+            text="🙈 Скрыть ответ",
+            callback_data=f"gq_hide:{q_id}",
+        ))
+    if answer_shown and has_source and not source_shown:
+        builder.row(InlineKeyboardButton(
+            text="📎 Показать источник",
+            callback_data=f"gq_src:{q_id}",
+        ))
+    return builder.as_markup()
 
 
 def _download_image_sync(url: str) -> bytes | None:
@@ -78,21 +137,21 @@ async def send_question(bot: Bot) -> None:
             )
         return
 
-    msg = _format_message(q)
+    msg = _build_group_text(q)
+    kb = _group_question_kb(q.id, has_answer=bool(q.answer), has_source=bool(q.source))
     if q.image_url:
         data = await asyncio.to_thread(_download_image_sync, q.image_url)
         if data:
             try:
                 from aiogram.types import BufferedInputFile
-                # Telegram caption limit is 1024 chars; truncate if needed
                 caption = msg if len(msg) <= 1024 else msg[:1021] + "…"
                 await bot.send_photo(
                     GROUP_ID,
                     photo=BufferedInputFile(data, filename="image.jpg"),
                     caption=caption,
                     parse_mode="HTML",
+                    reply_markup=kb,
                 )
-                # If full text was truncated, send the remainder as a follow-up
                 if len(msg) > 1024:
                     await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
                 await mark_as_sent(q.id)
@@ -100,7 +159,7 @@ async def send_question(bot: Bot) -> None:
                 return
             except Exception as exc:
                 logger.warning("send_photo failed, falling back to text: %s", exc)
-    await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
+    await bot.send_message(GROUP_ID, msg, parse_mode="HTML", reply_markup=kb)
     await mark_as_sent(q.id)
     logger.info("Sent question id=%d.", q.id)
 
