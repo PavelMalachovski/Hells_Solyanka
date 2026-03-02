@@ -415,7 +415,10 @@ async def cb_group_show_answer(callback: CallbackQuery) -> None:
     if q is None or not q.answer:
         await callback.answer("Вопрос не найден.", show_alert=True)
         return
-    await callback.answer(f"💡 Ответ: {q.answer}", show_alert=True)
+    text = f"💡 Ответ: {q.answer}"
+    if len(text) > 200:
+        text = text[:197] + "..."
+    await callback.answer(text, show_alert=True)
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("gq_src:"))
@@ -425,7 +428,10 @@ async def cb_group_show_source(callback: CallbackQuery) -> None:
     if q is None or not q.source:
         await callback.answer("Источник не найден.", show_alert=True)
         return
-    await callback.answer(f"📎 Источник:\n{q.source}", show_alert=True)
+    text = f"📎 Источник:\n{q.source}"
+    if len(text) > 200:
+        text = text[:197] + "..."
+    await callback.answer(text, show_alert=True)
 
 # ── callback: send question to group ─────────────────────────────────────────
 @router.callback_query(lambda c: c.data and c.data.startswith("q_send:"))
