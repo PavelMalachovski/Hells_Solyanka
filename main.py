@@ -130,8 +130,9 @@ def _question_detail_kb(
     has_answer: bool = False,
     answer_shown: bool = False,
     has_source: bool = False,
+    source_shown: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Keyboard for a single question: prev/next, show answer, show source, send to group, back."""
+    """Keyboard for a single question: prev/next, show/hide answer, show source, send, back."""
     builder = InlineKeyboardBuilder()
     nav: list[InlineKeyboardButton] = []
     if prev_id is not None:
@@ -151,7 +152,12 @@ def _question_detail_kb(
             text="💡 Показать ответ",
             callback_data=f"q_ans:{q_id}:{pack_id}:{page}:{filter_flag}",
         ))
-    if answer_shown and has_source:
+    if answer_shown:
+        builder.row(InlineKeyboardButton(
+            text="🙈 Скрыть ответ",
+            callback_data=f"q_view:{q_id}:{pack_id}:{page}:{filter_flag}",
+        ))
+    if answer_shown and has_source and not source_shown:
         builder.row(InlineKeyboardButton(
             text="📎 Показать источник",
             callback_data=f"q_src:{q_id}:{pack_id}:{page}:{filter_flag}",
@@ -183,6 +189,34 @@ def _build_question_text(q) -> str:
     )
     if q.image_url:
         text += f'\n\n🖼 <a href="{q.image_url}">Раздаточный материал</a>'
+    return text
+
+
+def _format_source_html(source: str) -> str:
+    """Wrap bare URLs in <a href> for clickability; escape plain text lines."""
+    import re as _re
+    lines = []
+    for line in source.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Numbered prefix like "1. https://..."
+        m = _re.match(r'^(\d+\.\s*)(https?://\S+)$', line)
+        if m:
+            lines.append(f'{m.group(1)}<a href="{m.group(2)}">{m.group(2)}</a>')
+        elif _re.match(r'^https?://', line):
+            lines.append(f'<a href="{line}">{line}</a>')
+        else:
+            lines.append(_html_mod.escape(line))
+    return "\n".join(lines)
+
+
+def _build_question_text_with_answer(q, include_source: bool = False) -> str:
+    """Build HTML message text for a question view with answer (optionally with source)."""
+    text = _build_question_text(q)
+    text += f"\n\n💡 <b>Ответ:</b> {_html_mod.escape(q.answer or '')}"
+    if include_source and q.source:
+        text += f"\n\n📎 <b>Источник:</b>\n{_format_source_html(q.source)}"
     return text
 
 
@@ -318,7 +352,7 @@ async def cb_show_answer(callback: CallbackQuery) -> None:
     prev_id, next_id = await get_adjacent_in_pack(q.id, pack_link, unsent_only=unsent_only)
 
     base_text = _build_question_text(q)
-    text_with_answer = base_text + f"\n\n💡 <b>Ответ:</b> {_html_mod.escape(q.answer or '')}"
+    text_with_answer = _build_question_text_with_answer(q)
 
     kb = _question_detail_kb(
         q.id, pack_id, page, filter_flag,
@@ -326,6 +360,7 @@ async def cb_show_answer(callback: CallbackQuery) -> None:
         has_answer=True,
         answer_shown=True,
         has_source=bool(q.source),
+        source_shown=False,
     )
 
     try:
@@ -338,13 +373,34 @@ async def cb_show_answer(callback: CallbackQuery) -> None:
 # ── callback: show source ────────────────────────────────────────────────────────────────
 @router.callback_query(lambda c: c.data and c.data.startswith("q_src:"))
 async def cb_show_source(callback: CallbackQuery) -> None:
+    # q_src:{q_id}:{pack_id}:{page}:{filter}
     parts = callback.data.split(":")
-    q_id = int(parts[1])
-    q = await get_question_by_id(q_id)
+    q_id, pack_id, page_str, filter_flag = parts[1], parts[2], parts[3], parts[4]
+    q = await get_question_by_id(int(q_id))
+    page = int(page_str)
+    unsent_only = filter_flag == "1"
+
     if q is None or not q.source:
         await callback.answer("Источник не найден.", show_alert=True)
         return
-    await callback.answer(q.source, show_alert=True)
+
+    pack_link = f"{BASE_URL}/pack/{pack_id}"
+    prev_id, next_id = await get_adjacent_in_pack(q.id, pack_link, unsent_only=unsent_only)
+
+    text = _build_question_text_with_answer(q, include_source=True)
+    kb = _question_detail_kb(
+        q.id, pack_id, page, filter_flag,
+        prev_id=prev_id, next_id=next_id,
+        has_answer=True,
+        answer_shown=True,
+        has_source=True,
+        source_shown=True,
+    )
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 
 # ── callback: send question to group ─────────────────────────────────────────
