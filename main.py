@@ -16,6 +16,7 @@ import logging
 import os
 
 from aiogram import Bot, Dispatcher, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import (
     BufferedInputFile,
@@ -327,7 +328,10 @@ async def cb_show_answer(callback: CallbackQuery) -> None:
         has_source=bool(q.source),
     )
 
-    await callback.message.edit_text(text_with_answer, parse_mode="HTML", reply_markup=kb)
+    try:
+        await callback.message.edit_text(text_with_answer, parse_mode="HTML", reply_markup=kb)
+    except TelegramBadRequest:
+        pass  # Already showing the answer — ignore double-tap
     await callback.answer()
 
 
