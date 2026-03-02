@@ -126,8 +126,9 @@ def _question_detail_kb(
     filter_flag: str,
     prev_id: int | None = None,
     next_id: int | None = None,
+    has_answer: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Keyboard for a single question: prev/next, send to group, back to pack."""
+    """Keyboard for a single question: prev/next, show answer, send to group, back to pack."""
     builder = InlineKeyboardBuilder()
     nav: list[InlineKeyboardButton] = []
     if prev_id is not None:
@@ -142,6 +143,11 @@ def _question_detail_kb(
         ))
     if nav:
         builder.row(*nav)
+    if has_answer:
+        builder.row(InlineKeyboardButton(
+            text="💡 Показать ответ",
+            callback_data=f"q_ans:{q_id}:{pack_id}:{page}:{filter_flag}",
+        ))
     builder.row(InlineKeyboardButton(
         text="📤 Отправить в группу",
         callback_data=f"q_send:{q_id}:{pack_id}:{page}:{filter_flag}",
@@ -151,6 +157,25 @@ def _question_detail_kb(
         callback_data=f"pq_page:{pack_id}:{page}:{filter_flag}",
     ))
     return builder.as_markup()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+import html as _html_mod
+
+
+def _build_question_text(q) -> str:
+    """Build HTML message text for a question view (without answer)."""
+    text = (
+        f"📚 <b>{_html_mod.escape(q.pack_name)}</b>  |  Вопрос {q.question_number}\n"
+        f"{'─' * 30}\n\n"
+        f"{_html_mod.escape(q.text)}"
+    )
+    if q.image_url:
+        text += f'\n\n🖼 <a href="{q.image_url}">Раздаточный материал</a>'
+    return text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -176,12 +201,17 @@ async def _send_with_image(bot: Bot, chat_id: str | int, msg: str, image_url: st
         data = await asyncio.to_thread(_download_image_sync, image_url)
         if data:
             try:
+                # Telegram caption limit is 1024 chars; truncate if needed
+                caption = msg if len(msg) <= 1024 else msg[:1021] + "…"
                 await bot.send_photo(
                     chat_id,
                     photo=BufferedInputFile(data, filename="image.jpg"),
-                    caption=msg,
+                    caption=caption,
                     parse_mode="HTML",
                 )
+                # Send full text as follow-up if caption was truncated
+                if len(msg) > 1024:
+                    await bot.send_message(chat_id, msg, parse_mode="HTML")
                 return
             except Exception as exc:
                 logger.warning("send_photo failed: %s", exc)
@@ -252,19 +282,43 @@ async def cb_question_view(callback: CallbackQuery) -> None:
     pack_link = f"{BASE_URL}/pack/{pack_id}"
     prev_id, next_id = await get_adjacent_in_pack(q.id, pack_link, unsent_only=unsent_only)
 
-    import html as _html
-    text = (
-        f"📚 <b>{_html.escape(q.pack_name)}</b>  |  Вопрос {q.question_number}\n"
-        f"{'─' * 30}\n\n"
-        f"{_html.escape(q.text)}"
+    text = _build_question_text(q)
+    kb = _question_detail_kb(
+        q.id, pack_id, page, filter_flag,
+        prev_id=prev_id, next_id=next_id,
+        has_answer=bool(q.answer),
     )
-    if q.image_url:
-        text += f'\n\n🖼 <a href="{q.image_url}">Раздаточный материал</a>'
-    if q.answer:
-        text += f"\n\n<tg-spoiler>💡 <b>Ответ:</b> {_html.escape(q.answer)}</tg-spoiler>"
-
-    kb = _question_detail_kb(q.id, pack_id, page, filter_flag, prev_id=prev_id, next_id=next_id)
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ── callback: show answer for 10 seconds then auto-hide ───────────────────────
+@router.callback_query(lambda c: c.data and c.data.startswith("q_ans:"))
+async def cb_show_answer(callback: CallbackQuery) -> None:
+    # q_ans:{q_id}:{pack_id}:{page}:{filter}
+    parts = callback.data.split(":")
+    q_id, pack_id, page_str, filter_flag = parts[1], parts[2], parts[3], parts[4]
+    q = await get_question_by_id(int(q_id))
+    page = int(page_str)
+    unsent_only = filter_flag == "1"
+
+    if q is None:
+        await callback.answer("Вопрос не найден.", show_alert=True)
+        return
+
+    pack_link = f"{BASE_URL}/pack/{pack_id}"
+    prev_id, next_id = await get_adjacent_in_pack(q.id, pack_link, unsent_only=unsent_only)
+
+    base_text = _build_question_text(q)
+    text_with_answer = base_text + f"\n\n💡 <b>Ответ:</b> {_html_mod.escape(q.answer or '')}"
+
+    kb = _question_detail_kb(
+        q.id, pack_id, page, filter_flag,
+        prev_id=prev_id, next_id=next_id,
+        has_answer=True,
+    )
+
+    await callback.message.edit_text(text_with_answer, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 

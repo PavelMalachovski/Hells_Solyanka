@@ -170,15 +170,30 @@ async def _fetch_single_question(
             imgs = await q_page.locator("main img, article img, [class*='question'] img").all()
             for img in imgs:
                 src = await img.get_attribute("src") or ""
-                if not src or src.startswith("data:"):
+                if not src or src.startswith("data:") or src.endswith(".svg"):
                     continue
-                # Skip tiny icon images
-                w = await img.get_attribute("width") or ""
-                h = await img.get_attribute("height") or ""
-                if w and int(w) < 64:
-                    continue
-                if h and int(h) < 64:
-                    continue
+                # Skip tiny icon images — use rendered bounding box (reliable),
+                # fall back to width/height attributes parsed safely.
+                try:
+                    box = await img.bounding_box()
+                    if box is not None:
+                        if box["width"] < 64 or box["height"] < 64:
+                            continue
+                    else:
+                        # Not rendered yet — try attributes
+                        def _safe_dim(val: str) -> int | None:
+                            try:
+                                return int("".join(c for c in val if c.isdigit()) or "0") or None
+                            except Exception:
+                                return None
+                        w = _safe_dim(await img.get_attribute("width") or "")
+                        h = _safe_dim(await img.get_attribute("height") or "")
+                        if w is not None and w < 64:
+                            continue
+                        if h is not None and h < 64:
+                            continue
+                except Exception:
+                    pass  # Can't determine size — include the image
                 if not src.startswith("http"):
                     src = BASE_URL + src if src.startswith("/") else BASE_URL + "/" + src
                 image_url = src

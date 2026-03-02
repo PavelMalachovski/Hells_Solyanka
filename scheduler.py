@@ -84,12 +84,17 @@ async def send_question(bot: Bot) -> None:
         if data:
             try:
                 from aiogram.types import BufferedInputFile
+                # Telegram caption limit is 1024 chars; truncate if needed
+                caption = msg if len(msg) <= 1024 else msg[:1021] + "…"
                 await bot.send_photo(
                     GROUP_ID,
                     photo=BufferedInputFile(data, filename="image.jpg"),
-                    caption=msg,
+                    caption=caption,
                     parse_mode="HTML",
                 )
+                # If full text was truncated, send the remainder as a follow-up
+                if len(msg) > 1024:
+                    await bot.send_message(GROUP_ID, msg, parse_mode="HTML")
                 await mark_as_sent(q.id)
                 logger.info("Sent question id=%d with photo.", q.id)
                 return
