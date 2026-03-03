@@ -23,7 +23,9 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    MenuButtonWebApp,
     Message,
+    WebAppInfo,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -44,6 +46,8 @@ from database import (
 from scheduler import ADMIN_ID, GROUP_ID, _build_group_text, _group_question_kb, build_scheduler, send_question
 from scraper import BASE_URL, FIRST_PACK_ID, scrape_all_packs, scrape_first_pack, scrape_pack
 
+from webapp_server import start_webapp_server
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
@@ -51,6 +55,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN: str = os.environ["BOT_TOKEN"]
+WEBAPP_URL: str | None = os.environ.get("WEBAPP_URL")  # e.g. https://your-app.up.railway.app
 
 router = Router()
 
@@ -704,10 +709,28 @@ async def main() -> None:
 
     # ── Startup hook: fires after polling connects, inside the running loop ──
     _scheduler = None
+    _webapp_runner = None
 
     @dp.startup()
     async def on_startup() -> None:
-        nonlocal _scheduler
+        nonlocal _scheduler, _webapp_runner
+
+        # Start the Web App HTTP server
+        _webapp_runner = await start_webapp_server(bot)
+
+        # Set Menu button for the Web App (if URL configured)
+        if WEBAPP_URL:
+            try:
+                await bot.set_chat_menu_button(
+                    menu_button=MenuButtonWebApp(
+                        text="🔥 Солянка",
+                        web_app=WebAppInfo(url=WEBAPP_URL),
+                    ),
+                )
+                logger.info("Menu button set to Web App: %s", WEBAPP_URL)
+            except Exception as e:
+                logger.warning("Could not set menu button: %s", e)
+
         _scheduler = build_scheduler(bot)
         _scheduler.start()
         logger.info("Scheduler started. Will send question at 10:00 (Europe/Prague).")
@@ -721,6 +744,9 @@ async def main() -> None:
     async def on_shutdown() -> None:
         if _scheduler:
             _scheduler.shutdown(wait=False)
+        if _webapp_runner:
+            await _webapp_runner.cleanup()
+            logger.info("Web App server stopped.")
 
     try:
         await dp.start_polling(
