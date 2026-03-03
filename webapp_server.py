@@ -177,9 +177,10 @@ def create_webapp(bot=None) -> web.Application:
     app.router.add_get("/api/pack/{name}", api_pack_questions)
     app.router.add_post("/api/command", api_command)
 
-    # Static files (CSS, JS)
+    # Static files (CSS, JS) and index
     if WEBAPP_DIR.exists():
-        app.router.add_static("/", WEBAPP_DIR, show_index=True)
+        app.router.add_get("/", serve_index)
+        app.router.add_static("/", WEBAPP_DIR)
 
     return app
 
