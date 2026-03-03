@@ -161,7 +161,11 @@ async def api_command(request: web.Request) -> web.Response:
 
 async def serve_index(request: web.Request) -> web.FileResponse:
     """Serve the main webapp page."""
-    return web.FileResponse(WEBAPP_DIR / "index.html")
+    index = WEBAPP_DIR / "index.html"
+    if not index.exists():
+        logger.error("index.html not found at %s", index)
+        raise web.HTTPNotFound(text=f"index.html not found. WEBAPP_DIR={WEBAPP_DIR}, exists={WEBAPP_DIR.exists()}, contents={list(WEBAPP_DIR.iterdir()) if WEBAPP_DIR.exists() else 'N/A'}")
+    return web.FileResponse(index)
 
 
 # ─── App factory ─────────────────────────────────────────────────────────────
@@ -177,9 +181,12 @@ def create_webapp(bot=None) -> web.Application:
     app.router.add_get("/api/pack/{name}", api_pack_questions)
     app.router.add_post("/api/command", api_command)
 
-    # Serve index.html at root, static assets from /static/
+    # Serve index.html and static assets
+    logger.info("WEBAPP_DIR=%s exists=%s", WEBAPP_DIR, WEBAPP_DIR.exists())
     if WEBAPP_DIR.exists():
-        app.router.add_get("/", serve_index)
+        logger.info("WEBAPP_DIR contents: %s", list(WEBAPP_DIR.iterdir()))
+    app.router.add_get("/", serve_index)
+    if WEBAPP_DIR.exists():
         app.router.add_static("/static", WEBAPP_DIR)
 
     return app
