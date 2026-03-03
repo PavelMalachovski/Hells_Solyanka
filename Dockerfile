@@ -47,4 +47,6 @@ COPY webapp/ ./webapp/
 ENV PYTHONUNBUFFERED=1
 ENV TZ=Europe/Prague
 
+EXPOSE 8080
+
 CMD ["python", "main.py"]
